@@ -18,6 +18,15 @@
   <xacro:property name="mesh_path" value="package://soarm_description/meshes"/>
 
   <!-- ================================================================== -->
+  <!-- World fixation (screwed to the table)                              -->
+  <!-- ================================================================== -->
+  <link name="world"/>
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+  </joint>
+
+  <!-- ================================================================== -->
   <!-- Links                                                              -->
   <!-- ================================================================== -->
 
