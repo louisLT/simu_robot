@@ -342,3 +342,111 @@ ros2 topic hz /camera/image_raw
 # Vérifier les topics Gazebo
 gz topic -l | grep camera
 ```
+
+# 3. Explications
+
+1. Le monde Gazebo — tracking_world.sdf
+C'est la scène 3D. Comme un plateau de tournage avant d'y poser les acteurs.
+
+
+Plugins système (lignes 13-19)
+Physics — le moteur physique ODE (gravité, collisions, forces)
+SceneBroadcaster — permet à l'interface graphique Gazebo d'afficher la scène
+UserCommands — permet de téléporter/supprimer des modèles via des services (utilisé par square_mover)
+Sensors — active le rendu des capteurs (caméra). Sans ce plugin, la caméra ne produit rien
+
+Modèles statiques
+ground_plane — le sol infini
+table — une boîte de 60×60cm, 5cm d'épaisseur, centrée en x=0.2 (devant le robot)
+overhead_camera — la caméra fixe, en plongée à 70cm de haut
+
+Modèle dynamique
+colored_square — le petit carré rouge 4×4cm, posé sur la table. static=false car le square_mover le téléporte
+2. Le modèle du robot — so101.urdf.xacro
+C'est l'ADN du robot. Il décrit 3 choses :
+
+a) Les links (lignes 25-255) — les pièces physiques
+Chaque <link> est un corps rigide avec :
+
+<inertial> — masse + tenseur d'inertie (nécessaire pour la simulation physique)
+<visual> — le mesh STL pour l'affichage 3D
+<collision> — la forme utilisée pour les collisions (ici = même mesh)
+La chaîne : base_link → shoulder_link → upper_arm_link → lower_arm_link → wrist_link → gripper_link → moving_jaw_link
+
+b) Les joints (lignes 260-318) — les articulations
+Chaque <joint> relie deux links :
+
+type="revolute" — rotation autour d'un axe
+<axis> — l'axe de rotation (ex: 0 0 1 = rotation autour de Z)
+<limit> — butées angulaires (en radians), effort max, vitesse max
+<dynamics> — amortissement et friction du joint
+<origin> — la position/orientation du joint par rapport au link parent
+Joint	Mouvement
+shoulder_pan	Rotation de la base (gauche/droite)
+shoulder_lift	Lever/baisser l'épaule
+elbow_flex	Plier le coude
+wrist_flex	Plier le poignet
+wrist_roll	Rotation du poignet
+gripper	Ouvrir/fermer la pince
+c) Le bloc ros2_control (lignes 323-357) — l'interface de commande
+C'est le pont entre ros2_control et Gazebo. Il dit :
+
+Le plugin hardware est gz_ros2_control/GazeboSimSystem (simulé, pas un vrai moteur)
+Pour chaque joint : on peut commander en position (command_interface) et lire la position et la vitesse (state_interface)
+initial_value = la position au démarrage (tous à 0.0 actuellement → bras déplié → il tombe)
+d) Le plugin Gazebo (lignes 362-366)
+
+<plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+  <parameters>$(find soarm_description)/config/controllers.yaml</parameters>
+</plugin>
+Ce plugin injecté dans Gazebo fait le lien : il lit les commandes venant de ros2_control et les applique comme des forces/positions sur les joints simulés. Il charge la config depuis controllers.yaml.
+
+3. La config des contrôleurs — controllers.yaml
+C'est la configuration de ros2_control, le framework qui gère les contrôleurs.
+
+
+controller_manager:          # Le chef d'orchestre
+  update_rate: 100           # Boucle de contrôle à 100 Hz
+Il déclare 3 contrôleurs :
+
+Contrôleur	Type	Rôle
+joint_state_broadcaster	Broadcaster	Ne commande rien. Il lit les positions/vitesses de tous les joints et les publie sur /joint_states
+arm_controller	JointTrajectoryController	Reçoit des trajectoires (séquence de positions dans le temps) via une action ROS2. Interpole et envoie les commandes de position aux 5 joints du bras
+gripper_controller	JointGroupPositionController	Plus simple : reçoit une position directe sur un topic pour le joint gripper
+La différence clé :
+
+arm_controller utilise une action (/arm_controller/follow_joint_trajectory) — requête/réponse avec feedback, adapté aux mouvements complexes
+gripper_controller utilise un topic (/gripper_controller/commands) — fire-and-forget, adapté à ouvrir/fermer
+4. Le bridge Gazebo↔ROS2 — gz_bridge.yaml
+Gazebo et ROS2 sont deux mondes séparés avec leurs propres systèmes de messages. Le bridge traduit :
+
+/camera/image (Gazebo) → /camera/image_raw (ROS2) — l'image caméra
+/clock (Gazebo) → /clock (ROS2) — le temps simulé (pour use_sim_time: True)
+Sans ce bridge, les nodes ROS2 ne voient ni la caméra ni le temps.
+
+5. Le launch Gazebo — gazebo.launch.py
+L'orchestrateur du démarrage. L'ordre compte :
+
+robot_state_publisher — publie le URDF sur /robot_description (pour que Gazebo sache quoi spawner)
+gazebo — lance le simulateur avec le monde
+spawn_robot — injecte le robot dans le monde
+gz_bridge + gz_set_pose_bridge — les bridges
+Après que spawn_robot finit → joint_state_broadcaster
+Après que joint_state_broadcaster finit → arm_controller + gripper_controller
+Ce chaînage (lignes 113-126) est crucial : si les contrôleurs démarrent avant que le robot existe dans Gazebo, ils crashent.
+
+6. Le launch complet — full_sim.launch.py
+Inclut gazebo.launch.py + ajoute les 4 nodes de tracking :
+
+square_mover — téléporte le carré rouge
+color_detector — détecte le rouge dans l'image
+arm_planner — calcule l'IK et envoie les trajectoires
+recorder — enregistre les données
+7. Les nodes de tracking — soarm_tracking/
+square_mover.py — Toutes les 2 secondes, appelle le service Gazebo set_pose pour déplacer colored_square à une position aléatoire sur la table.
+
+color_detector.py — Écoute /camera/image_raw, filtre le rouge en HSV, trouve le plus grand contour, projette le centroïde pixel en coordonnées 3D monde (via la pose connue de la caméra + intersection avec le plan de la table). Publie sur /target/position.
+
+arm_planner.py — Écoute /target/position, calcule la cinématique inverse avec ikpy, envoie la trajectoire au arm_controller.
+
+recorder.py — Enregistre les données (pas lu en détail, mais sauvegarde dans /ws/recordings).
