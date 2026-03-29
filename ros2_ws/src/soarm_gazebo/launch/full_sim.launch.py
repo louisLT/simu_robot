@@ -25,7 +25,7 @@ def generate_launch_description():
         executable='square_mover',
         name='square_mover',
         output='screen',
-        parameters=[{'use_sim_time': True}],
+        parameters=[{'use_sim_time': True, 'move_interval': 7.0}],
     )
 
     color_detector = Node(

@@ -13,7 +13,7 @@ class SquareMover(Node):
         super().__init__('square_mover')
 
         # Parameters
-        self.declare_parameter('move_interval', 2.0)  # seconds between moves
+        self.declare_parameter('move_interval', 7.0)  # seconds between moves
         self.declare_parameter('x_min', 0.05)
         self.declare_parameter('x_max', 0.40)
         self.declare_parameter('y_min', -0.20)
