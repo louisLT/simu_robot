@@ -21,7 +21,7 @@ down:
 
 # Open a shell in the running sim container
 shell:
-	docker exec -it soarm-sim bash
+	docker exec -it soarm-sim /entrypoint.sh bash
 
 # Rebuild ROS2 workspace inside container
 rebuild:
