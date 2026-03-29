@@ -135,18 +135,17 @@ class ColorDetector(Node):
         Uses the known camera pose and pinhole camera model.
         Camera is at (cam_x, cam_y, cam_z) with pitch rotation about Y.
         """
-        # Ray in camera frame (z-forward convention)
-        ray_cam = np.array([
-            (px - self.cx) / self.fx,
-            (py - self.cy) / self.fy,
-            1.0,
-        ])
+        # Ray in camera optical frame (x-right, y-down, z-forward)
+        dx = (px - self.cx) / self.fx
+        dy = (py - self.cy) / self.fy
 
-        # Rotation matrix: pitch about Y axis
+        # Convert to model frame (x-forward, y-left, z-up)
+        # optical z-forward → model x, optical x-right → model -y, optical y-down → model -z
+        ray_model = np.array([1.0, -dx, -dy])
+
+        # Rotation matrix: pitch about Y axis (model frame to world frame)
         cp = np.cos(self.cam_pitch)
         sp = np.sin(self.cam_pitch)
-        # Camera looks along its Z axis. With pitch rotation, the camera
-        # Z axis rotates in the XZ world plane.
         R = np.array([
             [cp, 0, sp],
             [0, 1, 0],
@@ -154,7 +153,7 @@ class ColorDetector(Node):
         ])
 
         # Ray in world frame
-        ray_world = R @ ray_cam
+        ray_world = R @ ray_model
 
         # Intersect with table plane z = table_height
         if abs(ray_world[2]) < 1e-6:
