@@ -1,4 +1,5 @@
 .envrc
+.env
 
 # ROS2 build artifacts
 ros2_ws/build/

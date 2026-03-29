@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv (Python package manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
+ENV UV_BREAK_SYSTEM_PACKAGES=1
 
 # ---------------------------------------------------------------------------
 # Stage 2: Development image with workspace
