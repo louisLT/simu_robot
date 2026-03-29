@@ -13,4 +13,7 @@ fi
 export GZ_SIM_RESOURCE_PATH="/ws/ros2_ws/install/soarm_description/share:${GZ_SIM_RESOURCE_PATH}"
 export GZ_SIM_RESOURCE_PATH="/ws/ros2_ws/install/soarm_gazebo/share:${GZ_SIM_RESOURCE_PATH}"
 
+# Set Gazebo system plugin path so it finds gz_ros2_control
+export GZ_SIM_SYSTEM_PLUGIN_PATH="/opt/ros/jazzy/lib:${GZ_SIM_SYSTEM_PLUGIN_PATH}"
+
 exec "$@"
