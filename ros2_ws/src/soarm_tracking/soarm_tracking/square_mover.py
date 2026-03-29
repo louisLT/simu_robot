@@ -52,7 +52,7 @@ class SquareMover(Node):
 
         request = SetEntityPose.Request()
         request.entity.name = self.entity_name
-        request.entity.type = 2  # MODEL
+        request.entity.type = 6  # MODEL
         request.pose = Pose(
             position=Point(x=x, y=y, z=self.z_height),
             orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0),

@@ -76,6 +76,16 @@ def generate_launch_description():
         output='screen',
     )
 
+    # ros_gz_bridge for set_pose service (to teleport models from ROS2)
+    gz_set_pose_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/world/tracking_world/set_pose@ros_gz_interfaces/srv/SetEntityPose',
+        ],
+        output='screen',
+    )
+
     # Controller manager: load and activate controllers
     joint_state_broadcaster_spawner = Node(
         package='controller_manager',
@@ -98,7 +108,16 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Chain: wait for joint_state_broadcaster before starting arm/gripper controllers
+    # Chain: wait for spawn_robot to finish before starting controllers
+    # This avoids "No clock received" warnings (Gazebo needs time to start publishing /clock)
+    delay_joint_state_broadcaster = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=spawn_robot,
+            on_exit=[joint_state_broadcaster_spawner],
+        )
+    )
+
+    # Then wait for joint_state_broadcaster before starting arm/gripper controllers
     delay_arm_controller = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
@@ -111,6 +130,7 @@ def generate_launch_description():
         gazebo,
         spawn_robot,
         gz_bridge,
-        joint_state_broadcaster_spawner,
+        gz_set_pose_bridge,
+        delay_joint_state_broadcaster,
         delay_arm_controller,
     ])
