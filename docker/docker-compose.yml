@@ -1,5 +1,6 @@
 # =============================================================================
 # SO-ARM101 Simulation - Docker Compose
+# GPU: AMD (via /dev/dri). Works with integrated and discrete AMD GPUs.
 # =============================================================================
 
 services:
@@ -15,9 +16,8 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
-      # NVIDIA GPU support
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
+      # Mesa/AMD GPU rendering
+      - LIBGL_ALWAYS_SOFTWARE=0
     volumes:
       # X11 forwarding for GUI (Gazebo, RViz)
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
@@ -25,14 +25,9 @@ services:
       - ../ros2_ws/src:/ws/ros2_ws/src:rw
       # Recordings output
       - ../recordings:/ws/recordings:rw
-    # For NVIDIA GPU
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # AMD GPU: pass through the DRI render devices
+    devices:
+      - /dev/dri:/dev/dri
     stdin_open: true
     tty: true
     command: bash
@@ -45,18 +40,12 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
+      - LIBGL_ALWAYS_SOFTWARE=0
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ../ros2_ws/src:/ws/ros2_ws/src:rw
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    devices:
+      - /dev/dri:/dev/dri
     command: ros2 launch soarm_description rviz.launch.py
     profiles:
       - rviz
