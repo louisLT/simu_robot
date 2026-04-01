@@ -37,21 +37,18 @@ class ArmPlanner(Node):
 
         # Build IK chain from URDF
         urdf_path = self.get_parameter('urdf_path').value
-        if urdf_path:
-            # Load chain from real URDF: base_link → ... → gripper_frame_link
-            # active_links_mask: only the 5 arm joints are active (not gripper, not fixed joints)
-            self.chain = ikpy.chain.Chain.from_urdf_file(
-                urdf_path,
-                base_elements=['base_link'],
-                last_link_vector=[0, 0, -0.098],  # gripper tip offset from gripper_link
-                active_links_mask=[False, True, True, True, True, True, False, False],
-            )
-            self.get_logger().info(f'IK chain loaded from {urdf_path}')
-            for i, link in enumerate(self.chain.links):
-                self.get_logger().info(f'  [{i}] {link.name}')
-        else:
-            self.chain = self._build_default_chain()
-            self.get_logger().info('Using default IK chain (approximate dimensions)')
+        assert urdf_path
+        # Load chain from real URDF: base_link → ... → gripper_frame_link
+        # active_links_mask: only the 5 arm joints are active (not gripper, not fixed joints)
+        self.chain = ikpy.chain.Chain.from_urdf_file(
+            urdf_path,
+            base_elements=['base_link'],
+            last_link_vector=[0, 0, -0.098],  # gripper tip offset from gripper_link
+            active_links_mask=[False, True, True, True, True, True, False, False],
+        )
+        self.get_logger().info(f'IK chain loaded from {urdf_path}')
+        for i, link in enumerate(self.chain.links):
+            self.get_logger().info(f'  [{i}] {link.name}')
 
         # Action client for arm_controller
         self.action_client = ActionClient(
@@ -71,61 +68,6 @@ class ArmPlanner(Node):
 
         self.get_logger().info('ArmPlanner started, waiting for arm_controller...')
 
-    def _build_default_chain(self):
-        """Build an approximate IK chain for the SO-ARM101."""
-        import ikpy.link
-
-        links = [
-            ikpy.link.OriginLink(),
-            # shoulder_pan: rotation about Z at base height
-            ikpy.link.URDFLink(
-                name='shoulder_pan',
-                origin_translation=[0.0388, 0, 0.0624],
-                origin_orientation=[0, 0, 0],
-                rotation=[0, 0, 1],
-                bounds=(-1.92, 1.92),
-            ),
-            # shoulder_lift: rotation about Y
-            ikpy.link.URDFLink(
-                name='shoulder_lift',
-                origin_translation=[0, 0, 0.054],
-                origin_orientation=[0, 0, 0],
-                rotation=[0, 1, 0],
-                bounds=(-1.75, 1.75),
-            ),
-            # elbow_flex: rotation about Y
-            ikpy.link.URDFLink(
-                name='elbow_flex',
-                origin_translation=[0.1126, 0, 0],
-                origin_orientation=[0, 0, 0],
-                rotation=[0, 1, 0],
-                bounds=(-1.69, 1.69),
-            ),
-            # wrist_flex: rotation about Y
-            ikpy.link.URDFLink(
-                name='wrist_flex',
-                origin_translation=[0.1349, 0, 0],
-                origin_orientation=[0, 0, 0],
-                rotation=[0, 1, 0],
-                bounds=(-1.66, 1.66),
-            ),
-            # wrist_roll: rotation about X (roll)
-            ikpy.link.URDFLink(
-                name='wrist_roll',
-                origin_translation=[0.061, 0, 0],
-                origin_orientation=[0, 0, 0],
-                rotation=[1, 0, 0],
-                bounds=(-2.74, 2.84),
-            ),
-            # End effector (fixed)
-            ikpy.link.URDFLink(
-                name='end_effector',
-                origin_translation=[0.05, 0, 0],
-                origin_orientation=[0, 0, 0],
-                rotation=[0, 0, 0],
-            ),
-        ]
-        return ikpy.chain.Chain(name='so101', links=links)
 
     def target_callback(self, msg):
         now = self.get_clock().now()
