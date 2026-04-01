@@ -38,14 +38,18 @@ class ArmPlanner(Node):
         # Build IK chain from URDF
         urdf_path = self.get_parameter('urdf_path').value
         if urdf_path:
+            # Load chain from real URDF: base_link → ... → gripper_frame_link
+            # active_links_mask: only the 5 arm joints are active (not gripper, not fixed joints)
             self.chain = ikpy.chain.Chain.from_urdf_file(
                 urdf_path,
                 base_elements=['base_link'],
+                last_link_vector=[0, 0, -0.098],  # gripper tip offset from gripper_link
                 active_links_mask=[False, True, True, True, True, True, False, False],
             )
             self.get_logger().info(f'IK chain loaded from {urdf_path}')
+            for i, link in enumerate(self.chain.links):
+                self.get_logger().info(f'  [{i}] {link.name}')
         else:
-            # Build chain manually with approximate SO-ARM101 dimensions
             self.chain = self._build_default_chain()
             self.get_logger().info('Using default IK chain (approximate dimensions)')
 
@@ -132,14 +136,25 @@ class ArmPlanner(Node):
         target = [msg.point.x, msg.point.y, msg.point.z]
 
         # Compute IK
-        seed = [0.0] + self.current_joint_positions[:5] + [0.0]
+        # Seed: one value per link in the chain (origin + 5 joints + end-effector)
+        n_links = len(self.chain.links)
+        seed = [0.0] * n_links
+        for i, link in enumerate(self.chain.links):
+            if link.name in self.joint_names:
+                idx = self.joint_names.index(link.name)
+                seed[i] = self.current_joint_positions[idx]
         joint_angles = self.chain.inverse_kinematics(
             target_position=target,
             initial_position=seed,
         )
 
-        # Extract the active joint values (skip base origin and end effector)
-        active_angles = joint_angles[1:6].tolist()
+        # Extract active joint values by matching names
+        active_angles = []
+        for jname in self.joint_names:
+            for i, link in enumerate(self.chain.links):
+                if link.name == jname:
+                    active_angles.append(joint_angles[i])
+                    break
 
         self.get_logger().info(
             f'Target: ({target[0]:.3f}, {target[1]:.3f}, {target[2]:.3f}) -> '
