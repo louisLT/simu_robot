@@ -22,9 +22,11 @@ class ArmPlanner(Node):
         self.declare_parameter('urdf_path', '')
         self.declare_parameter('move_duration', 1.5)  # seconds for each move
         self.declare_parameter('min_move_interval', 1.0)  # min time between commands
+        self.declare_parameter('hover_height', 0.10)  # height above target to hover
 
         self.move_duration = self.get_parameter('move_duration').value
         self.min_move_interval = self.get_parameter('min_move_interval').value
+        self.hover_height = self.get_parameter('hover_height').value
 
         # Joint names (must match URDF and controllers.yaml)
         self.joint_names = [
@@ -75,10 +77,9 @@ class ArmPlanner(Node):
         if elapsed < self.min_move_interval:
             return
 
-        target = [msg.point.x, msg.point.y, msg.point.z]
+        target = [msg.point.x, msg.point.y, msg.point.z + self.hover_height]
 
-        # Compute IK
-        # Seed: one value per link in the chain (origin + 5 joints + end-effector)
+        # Compute IK — seed from current positions for smooth transitions
         n_links = len(self.chain.links)
         seed = [0.0] * n_links
         for i, link in enumerate(self.chain.links):
