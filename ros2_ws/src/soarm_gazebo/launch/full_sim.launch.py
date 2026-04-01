@@ -25,7 +25,7 @@ def generate_launch_description():
         executable='square_mover',
         name='square_mover',
         output='screen',
-        parameters=[{'use_sim_time': True, 'move_interval': 7.0}],
+        parameters=[{'use_sim_time': True}],
     )
 
     color_detector = Node(
@@ -49,7 +49,7 @@ def generate_launch_description():
         executable='recorder',
         name='recorder',
         output='screen',
-        parameters=[{'use_sim_time': True, 'output_dir': '/ws/recordings'}],
+        parameters=[{'use_sim_time': True}],
     )
 
     return LaunchDescription([
