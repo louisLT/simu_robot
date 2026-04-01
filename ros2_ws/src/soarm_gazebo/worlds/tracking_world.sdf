@@ -5,7 +5,7 @@
 
     <!-- Physics -->
     <physics name="default_physics" type="ode">
-      <max_step_size>0.001</max_step_size>
+      <max_step_size>0.005</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
