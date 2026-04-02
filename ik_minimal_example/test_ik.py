@@ -7,8 +7,6 @@ Usage:
 
     # Terminal 2: run this script
     python3 test_ik.py --target 0.25 0.0 0.155
-
-    # Diagnostic mode: send known angles and compare FK vs Gazebo
     python3 test_ik.py --diag
 """
 
@@ -39,8 +37,14 @@ JOINT_NAMES = [
     'wrist_roll',
 ]
 
+BASE_LINK = 'base_link'
+
 ALL_MARKER_NAMES = ['ik_target_marker', 'fk_marker']
 
+
+# =============================================================================
+# Gazebo helpers
+# =============================================================================
 
 def cleanup_markers():
     """Remove all markers from previous runs."""
@@ -74,6 +78,14 @@ def spawn_target_marker(target, name='ik_target_marker', color='0 1 0 1'):
         '</sdf>'
     )
 
+    # Remove previous marker with same name
+    subprocess.run(
+        ['gz', 'service', '-s', '/world/tracking_world/remove',
+         '--reqtype', 'gz.msgs.Entity', '--reptype', 'gz.msgs.Boolean',
+         '--timeout', '2000', '--req', f'name: "{name}" type: MODEL'],
+        capture_output=True, text=True,
+    )
+
     result = subprocess.run(
         ['gz', 'service', '-s', '/world/tracking_world/create',
          '--reqtype', 'gz.msgs.EntityFactory', '--reptype', 'gz.msgs.Boolean',
@@ -103,50 +115,61 @@ def generate_urdf():
     return path
 
 
+# =============================================================================
+# IK Solver (ikpy)
+# =============================================================================
+
 def load_chain(urdf_path):
     """Load the IK chain from URDF."""
-    # First load without mask to discover the chain structure
+    # Discover chain structure first
     chain = ikpy.chain.Chain.from_urdf_file(
-        urdf_path,
-        base_elements=['base_link'],
+        urdf_path, base_elements=[BASE_LINK],
     )
     # Build mask: only the 5 arm joints are active
     active_joints = set(JOINT_NAMES)
     mask = [link.name in active_joints for link in chain.links]
     chain = ikpy.chain.Chain.from_urdf_file(
-        urdf_path,
-        base_elements=['base_link'],
-        active_links_mask=mask,
+        urdf_path, base_elements=[BASE_LINK], active_links_mask=mask,
     )
     return chain
 
 
-def solve_ik(chain, target):
-    """Solve IK and return active_angles."""
-    seed = [0.0] * len(chain.links)
-    joint_angles = chain.inverse_kinematics(target_position=target, initial_position=seed)
-
-    # Verify with FK
-    reached = chain.forward_kinematics(joint_angles)[:3, 3]
-    error = np.linalg.norm(np.array(target) - reached)
-
-    # Extract active joint angles
-    active_angles = []
+def solve_ik(chain, target, seed=None):
+    """Solve IK and return joint angles for JOINT_NAMES."""
+    n = len(chain.links)
+    ik_seed = [0.0] * n
+    if seed:
+        for jname, val in zip(JOINT_NAMES, seed):
+            for i, link in enumerate(chain.links):
+                if link.name == jname:
+                    ik_seed[i] = val
+                    break
+    angles = chain.inverse_kinematics(target_position=target, initial_position=ik_seed)
+    # Extract active joints
+    result = []
     for jname in JOINT_NAMES:
         for i, link in enumerate(chain.links):
             if link.name == jname:
-                active_angles.append(joint_angles[i])
+                result.append(angles[i])
                 break
+    return result
 
-    print('\n=== IK Result ===')
-    print(f'  Target:    [{target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f}]')
-    print(f'  FK says:   [{reached[0]:.4f}, {reached[1]:.4f}, {reached[2]:.4f}]')
-    print(f'  IK error:  {error:.6f} m')
-    for name, angle in zip(JOINT_NAMES, active_angles):
-        print(f'  {name:20s} = {angle:+.4f} rad  ({np.degrees(angle):+.1f} deg)')
 
-    return active_angles
+def forward_ik(chain, joint_angles):
+    """Return (x, y, z) end-effector position for given JOINT_NAMES angles."""
+    full = [0.0] * len(chain.links)
+    for jname, val in zip(JOINT_NAMES, joint_angles):
+        for i, link in enumerate(chain.links):
+            if link.name == jname:
+                full[i] = val
+                break
+    fk = chain.forward_kinematics(full)
+    return fk[:3, 3].tolist()
 
+
+# =============================================================================
+# Robot interface (ROS2)
+# =============================================================================
 
 class RobotInterface(Node):
     """Send trajectories and read joint states."""
@@ -157,6 +180,7 @@ class RobotInterface(Node):
             self, FollowJointTrajectory, '/arm_controller/follow_joint_trajectory',
         )
         self.last_joint_state = None
+        self._joint_state_updated = False
         self.joint_sub = self.create_subscription(
             JointState, '/joint_states', self._joint_state_cb, 10,
         )
@@ -166,14 +190,12 @@ class RobotInterface(Node):
         self._joint_state_updated = True
 
     def wait_for_joint_states(self, timeout=5.0):
-        """Wait until we receive a joint state message."""
         start = time.time()
         while self.last_joint_state is None and (time.time() - start) < timeout:
             rclpy.spin_once(self, timeout_sec=0.1)
         return self.last_joint_state
 
     def get_current_angles(self):
-        """Return current joint angles in JOINT_NAMES order."""
         msg = self.last_joint_state
         if msg is None:
             return None
@@ -187,7 +209,6 @@ class RobotInterface(Node):
         return angles
 
     def send_trajectory(self, positions, duration=3.0):
-        """Send joint positions and wait for result."""
         if not self.action_client.wait_for_server(timeout_sec=10.0):
             print('  ERROR: arm_controller not available')
             return False
@@ -214,7 +235,6 @@ class RobotInterface(Node):
         rclpy.spin_until_future_complete(self, result_future, timeout_sec=duration + 5.0)
         print('  Trajectory complete')
 
-        # Wait for a fresh JointState after the trajectory is done
         self._joint_state_updated = False
         deadline = time.time() + 2.0
         while not self._joint_state_updated and time.time() < deadline:
@@ -222,21 +242,26 @@ class RobotInterface(Node):
         return True
 
 
+# =============================================================================
+# Test modes
+# =============================================================================
+
 def run_diagnostic(chain, robot):
     """Send robot to known angles, compare FK prediction with actual Gazebo position."""
-    print('\n' + '=' * 60)
+    print(f'\n{"=" * 60}')
     print('DIAGNOSTIC MODE')
     print('=' * 60)
 
-    # Print chain structure
     print('\n=== Chain structure ===')
     for i, link in enumerate(chain.links):
-        active = chain.active_links_mask[i] if i < len(chain.active_links_mask) else False
+        active = chain.active_links_mask[i]
         print(f'  [{i}] {link.name:20s} active={active}')
 
-    # Test poses: all zeros and a known configuration
     test_poses = [
         ('All zeros', [0.0, 0.0, 0.0, 0.0, 0.0]),
+        ('Random 1', [0.2, -1.3, 0.8, -0.5, 0.3]),
+        ('Random 2', [0.5, -1.3, 0.2, -0.7, 0.5]),
+        ('Random 3', [0.7, -0.5, 0.3, -0.7, 0.8]),
         ('Shoulder forward', [0.0, -0.5, 0.5, 0.0, 0.0]),
         ('Reaching forward', [0.0, -0.3, 0.8, -0.5, 0.0]),
     ]
@@ -245,62 +270,52 @@ def run_diagnostic(chain, robot):
         print(f'\n--- Test: {name} ---')
         print(f'  Commanded angles: {[f"{a:+.3f}" for a in angles]}')
 
-        # FK prediction: build full angle array for ikpy
-        full_angles = [0.0] * len(chain.links)
-        for jname, angle in zip(JOINT_NAMES, angles):
-            for i, link in enumerate(chain.links):
-                if link.name == jname:
-                    full_angles[i] = angle
-                    break
-
-        fk = chain.forward_kinematics(full_angles)
-        fk_pos = fk[:3, 3]
+        fk_pos = forward_ik(chain, angles)
         print(f'  FK end-effector:  [{fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f}]')
 
-        # Spawn a marker where FK thinks the end-effector is
-        spawn_target_marker(fk_pos.tolist(), name=f'fk_marker', color='0 0 1 1')
+        spawn_target_marker(fk_pos, name='fk_marker', color='0 0 1 1')
 
-        # Send robot to these angles
         print('  Sending to robot...')
         robot.send_trajectory(angles, duration=3.0)
 
-        # Read actual angles
         actual = robot.get_current_angles()
         if actual:
             print(f'  Actual angles:    {[f"{a:+.3f}" for a in actual]}')
             angle_errors = [abs(c - a) for c, a in zip(angles, actual)]
             print(f'  Angle errors:     {[f"{e:.4f}" for e in angle_errors]}')
 
-        print(f'\n  >> Look at Gazebo: is the BLUE sphere at the gripper tip?')
+        print(f'\n  >> Look at Gazebo: is the BLUE sphere at the gripper base?')
         print(f'     FK position: [{fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f}]')
         input('     Press Enter to continue...')
 
 
 def run_ik_test(chain, robot, target, duration):
     """Solve IK for target and send to robot."""
-    # Spawn green marker at target
     print('\nSpawning target marker...')
     spawn_target_marker(target, name='ik_target_marker', color='0 1 0 1')
 
     # Solve IK
     active_angles = solve_ik(chain, target)
 
-    # Spawn blue marker at FK prediction (where ikpy thinks the gripper base goes)
-    full_angles = [0.0] * len(chain.links)
-    for jname, angle in zip(JOINT_NAMES, active_angles):
-        for i, link in enumerate(chain.links):
-            if link.name == jname:
-                full_angles[i] = angle
-                break
-    fk_pos = chain.forward_kinematics(full_angles)[:3, 3]
-    spawn_target_marker(fk_pos.tolist(), name='fk_marker', color='0 0 1 1')
+    # Verify with FK
+    fk_pos = forward_ik(chain, active_angles)
+    error = np.linalg.norm(np.array(target) - np.array(fk_pos))
+
+    print('\n=== IK Result ===')
+    print(f'  Target:    [{target[0]:.4f}, {target[1]:.4f}, {target[2]:.4f}]')
+    print(f'  FK says:   [{fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f}]')
+    print(f'  IK error:  {error:.6f} m')
+    for name, angle in zip(JOINT_NAMES, active_angles):
+        print(f'  {name:20s} = {angle:+.4f} rad  ({np.degrees(angle):+.1f} deg)')
+
+    # Spawn FK marker
+    spawn_target_marker(fk_pos, name='fk_marker', color='0 0 1 1')
     print(f'  FK prediction (blue sphere): [{fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f}]')
 
     # Send to robot
     print('\n=== Sending to robot ===')
     robot.send_trajectory(active_angles, duration=duration)
 
-    # Show actual angles
     actual = robot.get_current_angles()
     if actual:
         print(f'\n  Commanded: {[f"{a:+.4f}" for a in active_angles]}')
@@ -311,6 +326,10 @@ def run_ik_test(chain, robot, target, duration):
     print('     BLUE sphere  = where FK thinks gripper base is')
     print('     Compare both with actual gripper base position.')
 
+
+# =============================================================================
+# Main
+# =============================================================================
 
 def main():
     parser = argparse.ArgumentParser(description='Minimal IK test for SO-ARM101')
@@ -323,21 +342,25 @@ def main():
                         help='Diagnostic: send known angles and compare FK vs Gazebo')
     args = parser.parse_args()
 
-    # Clean up markers from previous runs
     cleanup_markers()
 
-    # Generate URDF
     print('Generating URDF from xacro...')
     urdf_path = generate_urdf()
 
-    # Load chain
     chain = load_chain(urdf_path)
 
     if args.dry_run:
-        solve_ik(chain, args.target)
+        active_angles = solve_ik(chain, args.target)
+        fk_pos = forward_ik(chain, active_angles)
+        error = np.linalg.norm(np.array(args.target) - np.array(fk_pos))
+        print(f'\n=== IK Result ===')
+        print(f'  Target:  {args.target}')
+        print(f'  FK says: [{fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f}]')
+        print(f'  Error:   {error:.6f} m')
+        for name, angle in zip(JOINT_NAMES, active_angles):
+            print(f'  {name:20s} = {angle:+.4f} rad  ({np.degrees(angle):+.1f} deg)')
         return
 
-    # Start ROS2
     rclpy.init()
     robot = RobotInterface()
     robot.wait_for_joint_states()
