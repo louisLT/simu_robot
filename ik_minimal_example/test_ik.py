@@ -39,6 +39,19 @@ JOINT_NAMES = [
     'wrist_roll',
 ]
 
+ALL_MARKER_NAMES = ['ik_target_marker', 'fk_marker']
+
+
+def cleanup_markers():
+    """Remove all markers from previous runs."""
+    for name in ALL_MARKER_NAMES:
+        subprocess.run(
+            ['gz', 'service', '-s', '/world/tracking_world/remove',
+             '--reqtype', 'gz.msgs.Entity', '--reptype', 'gz.msgs.Boolean',
+             '--timeout', '2000', '--req', f'name: "{name}" type: MODEL'],
+            capture_output=True, text=True,
+        )
+
 
 def spawn_target_marker(target, name='ik_target_marker', color='0 1 0 1'):
     """Spawn a small sphere in Gazebo at the given position."""
@@ -59,14 +72,6 @@ def spawn_target_marker(target, name='ik_target_marker', color='0 1 0 1'):
         '</link>'
         '</model>'
         '</sdf>'
-    )
-
-    # Remove previous marker
-    subprocess.run(
-        ['gz', 'service', '-s', '/world/tracking_world/remove',
-         '--reqtype', 'gz.msgs.Entity', '--reptype', 'gz.msgs.Boolean',
-         '--timeout', '2000', '--req', f'name: "{name}" type: MODEL'],
-        capture_output=True, text=True,
     )
 
     result = subprocess.run(
@@ -280,6 +285,17 @@ def run_ik_test(chain, robot, target, duration):
     # Solve IK
     active_angles = solve_ik(chain, target)
 
+    # Spawn blue marker at FK prediction (where ikpy thinks the gripper base goes)
+    full_angles = [0.0] * len(chain.links)
+    for jname, angle in zip(JOINT_NAMES, active_angles):
+        for i, link in enumerate(chain.links):
+            if link.name == jname:
+                full_angles[i] = angle
+                break
+    fk_pos = chain.forward_kinematics(full_angles)[:3, 3]
+    spawn_target_marker(fk_pos.tolist(), name='fk_marker', color='0 0 1 1')
+    print(f'  FK prediction (blue sphere): [{fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f}]')
+
     # Send to robot
     print('\n=== Sending to robot ===')
     robot.send_trajectory(active_angles, duration=duration)
@@ -290,7 +306,10 @@ def run_ik_test(chain, robot, target, duration):
         print(f'\n  Commanded: {[f"{a:+.4f}" for a in active_angles]}')
         print(f'  Actual:    {[f"{a:+.4f}" for a in actual]}')
 
-    print('\n  >> Look at Gazebo: is the gripper at the GREEN sphere?')
+    print('\n  >> Look at Gazebo:')
+    print('     GREEN sphere = target position')
+    print('     BLUE sphere  = where FK thinks gripper base is')
+    print('     Compare both with actual gripper base position.')
 
 
 def main():
@@ -303,6 +322,9 @@ def main():
     parser.add_argument('--diag', action='store_true',
                         help='Diagnostic: send known angles and compare FK vs Gazebo')
     args = parser.parse_args()
+
+    # Clean up markers from previous runs
+    cleanup_markers()
 
     # Generate URDF
     print('Generating URDF from xacro...')
