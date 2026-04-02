@@ -25,6 +25,8 @@ services:
       - ../ros2_ws/src:/ws/ros2_ws/src:rw
       # Recordings output
       - ../recordings:/ws/recordings:rw
+      # IK minimal example
+      - ../ik_minimal_example:/ws/ik_minimal_example:rw
     # AMD GPU: pass through the DRI render devices
     devices:
       - /dev/dri:/dev/dri

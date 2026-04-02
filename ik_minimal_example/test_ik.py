@@ -26,6 +26,51 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 
 
+def spawn_target_marker(target):
+    """Spawn a small green sphere in Gazebo at the target position."""
+    x, y, z = target
+    sdf = (
+        '<sdf version=\\"1.9\\">'
+        '<model name=\\"ik_target_marker\\">'
+        '<static>true</static>'
+        f'<pose>{x} {y} {z} 0 0 0</pose>'
+        '<link name=\\"link\\">'
+        '<visual name=\\"v\\">'
+        '<geometry><sphere><radius>0.02</radius></sphere></geometry>'
+        '<material>'
+        '<ambient>0 1 0 1</ambient>'
+        '<diffuse>0 1 0 1</diffuse>'
+        '</material>'
+        '</visual>'
+        '</link>'
+        '</model>'
+        '</sdf>'
+    )
+
+    # Remove previous marker if it exists
+    subprocess.run(
+        ['gz', 'service', '-s', '/world/tracking_world/remove',
+         '--reqtype', 'gz.msgs.Entity',
+         '--reptype', 'gz.msgs.Boolean',
+         '--timeout', '2000',
+         '--req', 'name: "ik_target_marker" type: MODEL'],
+        capture_output=True, text=True,
+    )
+
+    result = subprocess.run(
+        ['gz', 'service', '-s', '/world/tracking_world/create',
+         '--reqtype', 'gz.msgs.EntityFactory',
+         '--reptype', 'gz.msgs.Boolean',
+         '--timeout', '5000',
+         '--req', f'sdf: "{sdf}"'],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f'  Target marker (green sphere) spawned at [{x:.3f}, {y:.3f}, {z:.3f}]')
+    else:
+        print(f'  WARNING: Could not spawn marker: {result.stderr.strip()}')
+
+
 JOINT_NAMES = [
     'shoulder_pan',
     'shoulder_lift',
@@ -176,11 +221,15 @@ def main():
     # Step 2: Solve IK
     active_angles = solve_ik(urdf_path, args.target)
 
+    # Step 3: Spawn visual marker at target
+    print('\nSpawning target marker in Gazebo...')
+    spawn_target_marker(args.target)
+
     if args.dry_run:
         print('\n  --dry-run: not sending to robot')
         return
 
-    # Step 3: Send to robot
+    # Step 4: Send to robot
     rclpy.init()
     node = IKTestNode(active_angles, move_duration=args.duration)
     node.send_and_wait()
