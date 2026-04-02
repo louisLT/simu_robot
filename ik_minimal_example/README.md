@@ -23,6 +23,7 @@ ros2 launch soarm_gazebo gazebo.launch.py
 
 ```bash
 make shell
+python3 /ws/ik_minimal_example/test_ik.py --target 0.3166 0.0176 0.2555
 python3 /ws/ik_minimal_example/test_ik.py --target 0.25 0.0 0.155
 ```
 
